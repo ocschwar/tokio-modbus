@@ -1,0 +1,15 @@
+[package]
+name = "modbus-server"
+version = "0.1.0"
+authors = ["Omri Schwarz <oschwarz@cse.fraunhofer.org>"]
+
+[dependencies]
+enum_primitive = "*"
+modbus = { git = "https://github.com/hirschenberger/modbus-rs.git" }
+docopt = "*"
+futures = "0.1"
+tokio-core = "0.1"
+tokio-proto = "0.1"
+tokio-service = "0.1"
+byteorder = "0.5"
+rustc-serialize = "*"
