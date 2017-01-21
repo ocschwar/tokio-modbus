@@ -26,7 +26,7 @@ use tokio_proto::pipeline::ServerProto;
 use tokio_service::Service;
 use std::io::Cursor;
 use byteorder::{BigEndian, ReadBytesExt};
-use modbus::{Coil,binary,Reason,ExceptionCode};
+use modbus::{Coil,binary,Reason,ExceptionCode,tcp};
 use std::thread;
 use std::sync::mpsc::channel;
 use docopt::Docopt;
@@ -99,6 +99,14 @@ pub enum ModbusResponsePDU {
     ModbusErrorResponse {code:Code, exception_code:Code}
 }
 
+#[derive(RustcEncodable, RustcDecodable,Debug)]
+#[repr(packed)]
+struct Header {
+    tid: u16,
+    pid: u16,
+    len: u16,
+    uid: u8,
+}
 
 #[derive(Debug)]
 pub struct ModbusFooter {
@@ -115,11 +123,27 @@ pub struct ModbusRequestPDU {
     addl: Option<ModbusFooter>
 }
 
-//pub struct ModbusExceptionPDU{Code,Count,Values
-//}
+#[derive(Debug)]
+pub struct ModbusRequest {
+    header: Header,
+    pdu: ModbusRequestPDU
+}
+#[derive(Debug)]
+pub struct ModbusResponse {
+    header: Header,
+    pdu: ModbusResponsePDU
+}
+// TODO: get tcp.rs to have that as a 
 
-fn parse_modbus_request(from: &[u8]) -> std::io::Result<ModbusRequestPDU> {
+fn parse_modbus_request(from: &[u8]) -> std::io::Result<ModbusRequest> {
     let mut rdr = Cursor::new(from);
+    let header = Header{
+        tid: rdr.read_u16::<BigEndian>().unwrap(),
+        pid: rdr.read_u16::<BigEndian>().unwrap(),
+        len: rdr.read_u16::<BigEndian>().unwrap(),
+        uid: rdr.read_u8().unwrap(),
+    };
+
     let code = rdr.read_u8().unwrap();
     let address = rdr.read_u16::<BigEndian>()?;
     let count =  rdr.read_u16::<BigEndian>()?;
@@ -142,38 +166,41 @@ fn parse_modbus_request(from: &[u8]) -> std::io::Result<ModbusRequestPDU> {
         }
         
     };
-    Ok(ModbusRequestPDU{
-        code:code as u8,
-        address:address,
-        q_or_v: count,
-        addl:addl
+    Ok(ModbusRequest{
+        header:header,
+        pdu:ModbusRequestPDU{
+            code:code as u8,
+            address:address,
+            q_or_v: count,
+            addl:addl
+        }
             
     })
 }
 
 
 impl Codec for ModbusCodec {
-    type In = ModbusRequestPDU;
-    type Out = ModbusResponsePDU;
+    type In = ModbusRequest;
+    type Out = ModbusResponse;
 
     // Attempt to decode a message from the given buffer if a complete
     // message is available; returns `Ok(None)` if the buffer does not yet
     // hold a complete message.
 
-    // Read first 5 bytes.
+    // Read first 12 bytes.
     // Decide if more are needed. 
-    fn decode(&mut self, buf: &mut EasyBuf) -> std::io::Result<Option<ModbusRequestPDU>> {
+    fn decode(&mut self, buf: &mut EasyBuf) -> std::io::Result<Option<ModbusRequest>> {
         let mut rdr = Cursor::new(&buf);
-
-        if buf.len()>= 5 {
+        if buf.len()>= 12 {
             let code = rdr.read_u8()?;
-            rdr.set_position(4);
+            rdr.set_position(11);
             match FunctionCode::from_u8(code).unwrap() {
                 FunctionCode::WriteMultipleCoils |
                 FunctionCode::WriteMultipleRegisters => {
                     let byte_count = rdr.read_u8()? as usize;
-                    if buf.len() >= byte_count + 6 {
-                        Ok(Some(parse_modbus_request(buf.as_slice()).unwrap()))
+                    if buf.len() >= byte_count + 13 {
+                        Ok(Some(parse_modbus_request(buf.as_slice()
+                                                     ).unwrap()))
                     } else {
                         Ok(None)
                     }
@@ -188,12 +215,11 @@ impl Codec for ModbusCodec {
 
     // Attempt to decode a message assuming that the given buffer contains
     // *all* remaining input data.
-    fn decode_eof(&mut self, buf: &mut EasyBuf) -> io::Result<ModbusRequestPDU> {
-        let amt = buf.len();
-        Ok(parse_modbus_request(buf.drain_to(amt).as_slice())?)
+    fn decode_eof(&mut self, buf: &mut EasyBuf) -> io::Result<ModbusRequest> {
+        Ok(parse_modbus_request(&buf.as_slice())?)
     }
 
-    fn encode(&mut self, item: ModbusResponsePDU, into: &mut Vec<u8>) -> io::Result<()> {
+    fn encode(&mut self, item: ModbusResponse, into: &mut Vec<u8>) -> io::Result<()> {
 
         match item {
             _ =>{
@@ -209,8 +235,8 @@ impl Codec for ModbusCodec {
 pub struct ModbusProto;
 
 impl<T: Io + 'static> ServerProto<T> for ModbusProto {
-    type Request = ModbusRequestPDU;
-    type Response = ModbusResponsePDU;
+    type Request = ModbusRequest;
+    type Response = ModbusResponse;
 //    type Error = io::Error;
     type Transport = Framed<T, ModbusCodec>;
     type BindTransport = ::std::result::Result<Self::Transport,io::Error>;
@@ -325,7 +351,7 @@ impl  BlankRegisters {
         
     }
     fn call(& mut self, req: ModbusRequestPDU) -> ModbusResponsePDU {
-        match FunctionCode::from_u8(req.code).unwrap(){
+        let mut resp = match FunctionCode::from_u8(req.code).unwrap(){
             FunctionCode::WriteMultipleCoils  => {
                 self.write_multiple_coils(
                     req.code,
@@ -382,8 +408,8 @@ impl  BlankRegisters {
                     req.address,
                     req.q_or_v)
              }
-        }
-
+        };
+        resp
     }
 }
 
@@ -411,15 +437,18 @@ impl ModbusService {
 
 impl Service for ModbusService {
     
-    type Request = ModbusRequestPDU;
-    type Response = ModbusResponsePDU;
+    type Request = ModbusRequest;
+    type Response = ModbusResponse;
     
     type Error = io::Error;
     type Future = BoxFuture<Self::Response, Self::Error>;
  
     fn call(&self, req: Self::Request) -> Self::Future {
-        self.In.send(req).unwrap();
-        future::ok(self.out.recv().unwrap()).boxed()
+        self.In.send(req.pdu).unwrap();
+        future::ok( ModbusResponse{
+            header:req.header,
+            pdu:self.out.recv().unwrap()
+        }).boxed()
     }
 }
 
