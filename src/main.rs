@@ -3,7 +3,9 @@
 
 */ 
 #![feature(inclusive_range_syntax)] 
+#![feature(type_ascription)]
 extern crate futures;
+
 extern crate tokio_core;
 extern crate tokio_proto;
 extern crate tokio_service;
@@ -17,8 +19,9 @@ extern crate enum_primitive;
 use std::str;
 use std::io::{self, ErrorKind, Write,Read};
 use enum_primitive::FromPrimitive;
-use futures::{future, Future, BoxFuture};
+use futures::{future, Future, BoxFuture,Stream,Sink};
 use tokio_core::io::{Io, Codec, Framed, EasyBuf};
+use tokio_core::reactor::Core;
 use tokio_proto::TcpServer;
 use tokio_proto::pipeline::ServerProto;
 use tokio_service::Service;
@@ -29,7 +32,7 @@ use std::thread;
 use std::sync::mpsc::channel;
 use docopt::Docopt;
 
-use std::sync::mpsc::{Sender, Receiver};
+//use futures::sync::mpsc::{Sender, Receiver};
 
 enum_from_primitive! {
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -182,12 +185,12 @@ impl Header {
 }
 
 
-#[derive(Debug)]
+#[derive(Debug,Clone)]
 pub struct ModbusFooter {
     byte_count:u8,
     data : Vec<u8>
 }
-#[derive(Debug)]
+#[derive(Debug,Clone)]
 pub struct ModbusRequestPDU {
     code: u8,
     address: u16,
@@ -491,30 +494,20 @@ impl  BlankRegisters {
 }
 
 pub struct ModbusService {
-    in_: Sender<ModbusRequestPDU>,
-    out: Receiver<ModbusResponsePDU>,
-
+    in_: futures::sync::mpsc::Sender<(
+        ModbusRequestPDU,
+        std::sync::mpsc::Sender<ModbusResponsePDU>)>,
 }
 
 impl ModbusService {
-    fn new () -> ModbusService {
-        let (in_,req_out): (Sender<ModbusRequestPDU>,Receiver<ModbusRequestPDU>)=channel();
-        let (resp_in,out): (Sender<ModbusResponsePDU>,Receiver<ModbusResponsePDU>)=channel();
-        let mut block = BlankRegisters::new();
-        thread::spawn(move ||{
-            block = BlankRegisters::new();
-            loop {
-                println!("Loop");
-                let req = req_out.recv().unwrap();
-                println!("req {:?}",req);
-                let resp = block.call(req);
-                println!("resp {:?}",resp);
-                resp_in.send(
-                    resp).unwrap();
-            }
-        });
-        ModbusService{ in_:in_,out:out}
+    fn new (
+        in_ :futures::sync::mpsc::Sender<(
+            ModbusRequestPDU,
+            std::sync::mpsc::Sender<ModbusResponsePDU>)>,
+            ) -> ModbusService {
+        ModbusService{ in_:in_}
     }
+
 }
 
 impl Service for ModbusService {
@@ -524,11 +517,11 @@ impl Service for ModbusService {
     
     type Error = io::Error;
     type Future = BoxFuture<Self::Response, Self::Error>;
- 
     fn call(&self, req: Self::Request) -> Self::Future {
-        let s = self.in_.send(req.pdu).unwrap();
-        let pdu = self.out.recv().unwrap();
-        println!("pdu {:?} s {:?}",pdu,s);
+        let (resp_in,out)=std::sync::mpsc::channel::<ModbusResponsePDU>();
+        self.in_.send((req.pdu.clone(), resp_in.clone()));
+        let pdu = out.recv().unwrap();
+        println!("pdu {:?}",pdu);
         future::ok( ModbusResponse{
             header:req.header,
             pdu:pdu
@@ -542,7 +535,18 @@ fn main() {
         .and_then(|d| d.decode())
         .unwrap_or_else(|e| {println!("DAMN {:?}",e); e.exit()});
     println!("{:?}", args);
+    let (in_,req_out)=futures::sync::mpsc::channel::<(ModbusRequestPDU,std::sync::mpsc::Sender<ModbusResponsePDU>)>(0);
+    thread::spawn(move ||{
+        
+        let mut block = BlankRegisters::new();
+        let mut core = Core::new().unwrap();
+        core.run(req_out.map(
+            |(req, tx)|{
+                tx.send(block.call(req))
+            }).for_each(|e| Ok(()))).unwrap();
+    });
     
     TcpServer::new(ModbusProto, args.flag_addr.parse().unwrap())
-        .serve(|| Ok(ModbusService::new()));
+        .serve(move || Ok(ModbusService::new(
+            in_.clone())));
 }
