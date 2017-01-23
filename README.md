@@ -4,7 +4,7 @@ A Modbus-TCP slave based on the modbus crate.
 Based on http://www.modbus.org/docs/Modbus_Application_Protocol_V1_1b.pdf
 
 TODO:
-    1. Add error handling.
+    1. Add error handling. [DONE]
     
        The Modbus standard imposes limits on reads and writes
        to keep PDUs within the 255 byte limit. Server side enforcement
