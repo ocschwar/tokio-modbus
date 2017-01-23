@@ -15,9 +15,7 @@ extern crate docopt;
 extern crate rustc_serialize;
 #[macro_use]
 extern crate enum_primitive;
-//use std::rc::Arc;
 use std::sync::{Arc,Mutex};
-//use std::cell::RefCell;
 use std::str;
 use std::io::{self, ErrorKind, Write,Read};
 use enum_primitive::FromPrimitive;
@@ -34,7 +32,6 @@ use std::thread;
 use std::sync::mpsc::channel;
 use docopt::Docopt;
 
-//use futures::sync::mpsc::{Sender, Receiver};
 
 enum_from_primitive! {
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -165,6 +162,7 @@ impl ModbusResponsePDU {
         
 
 }
+// This could be imported from modbus::tcp. 
 #[derive(RustcEncodable, RustcDecodable,Debug)]
 #[repr(packed)]
 struct Header {
@@ -176,8 +174,7 @@ struct Header {
 
 impl Header {
     fn encode (&self) -> Vec<u8>{
-        let mut buff:Vec<u8> = Vec::new();
-        //let mut wrtr = Cursor::new(buff);
+        let mut buff:Vec<u8> = Vec::new();        
         buff.write_u16::<BigEndian>(self.tid);
         buff.write_u16::<BigEndian>(self.pid);
         buff.write_u16::<BigEndian>(self.len);
@@ -212,7 +209,6 @@ pub struct ModbusResponse {
     header: Header,
     pdu: ModbusResponsePDU
 }
-// TODO: get tcp.rs to have that as a 
 
 fn parse_modbus_request(from: &[u8]) -> std::io::Result<ModbusRequest> {
     let mut rdr = Cursor::new(from);
@@ -275,6 +271,7 @@ impl Codec for ModbusCodec {
             let mut length:usize = 0;
             let mut code:u8=0;
             let mut byte_count:usize = 0 ;
+            // Scope created just for z so it goes away before we run parse()
             {
                 let z = buf.as_slice();
                 code = z[7] as u8;
@@ -294,7 +291,7 @@ impl Codec for ModbusCodec {
                     _ => 12
                 }
             }
-            println!("got code {} {}",code as u8,length);
+
             match length {
                 0 => Ok(None),
                 _ => Ok(Some(parse_modbus_request(&buf.drain_to(length).as_slice()).unwrap()))
@@ -305,12 +302,10 @@ impl Codec for ModbusCodec {
     // Attempt to decode a message assuming that the given buffer contains
     // *all* remaining input data.
     fn decode_eof(&mut self, buf: &mut EasyBuf) -> io::Result<ModbusRequest> {
-        println!("got eof");
         Ok(parse_modbus_request(&buf.as_slice())?)
     }
 
     fn encode(&mut self, item: ModbusResponse, into: &mut Vec<u8>) -> io::Result<()> {
-        println!("encode");
         into.write(item.header.encode().as_slice());
         into.write(item.pdu.encode().as_slice());
         Ok(())
@@ -324,7 +319,6 @@ pub struct ModbusProto;
 impl<T: Io + 'static> ServerProto<T> for ModbusProto {
     type Request = ModbusRequest;
     type Response = ModbusResponse;
-//    type Error = io::Error;
     type Transport = Framed<T, ModbusCodec>;
     type BindTransport = ::std::result::Result<Self::Transport,io::Error>;
 
@@ -338,11 +332,11 @@ pub struct BlankRegisters {
     holding_registers : Vec<u16>,
     input_registers : Vec<u16>,
     coils : Vec<modbus::Coil>,
-    discrete_registers : Vec<modbus::Coil>
-    
+    discrete_registers : Vec<modbus::Coil>    
 }
 
 impl  BlankRegisters {
+    
     // An inert implementation, with
     // a data store for each category.
     
@@ -355,40 +349,37 @@ impl  BlankRegisters {
             holding_registers: holding_registers,
             coils:coils,
             input_registers:input_registers,
-            discrete_registers:discrete_registers
-                
+            discrete_registers:discrete_registers                
         }        
     }
+    
     fn write_multiple_coils(
         & mut self,
         code:Code, address:Address,
         quantity:Quantity, values:Vec<modbus::Coil>) -> ModbusResponsePDU
-
     {
+        // TODO: this one call is suspect. 
         for i in 0..values.len() {
             self.coils[ address as usize + i] = values[i] ;
         }
         ModbusResponsePDU::WriteMultipleCoilsResponse {
             code: code , address:address, quantity:quantity
         }
-        
     }
+
     fn write_multiple_registers(
         & mut self,
         code:Code, address:Address,
         quantity:Quantity, values:Vec<u16>) -> ModbusResponsePDU
-
     {
         for i in 0..quantity {
-            println!("WMR {} {} {} {} {}",i,quantity, address, address+i, values.len());
-            
             self.holding_registers[ (address+i) as usize ] = values[i as usize] ;
         }
         ModbusResponsePDU::WriteMultipleRegistersResponse {
             code: code , address:address, quantity:quantity
-        }
-        
+        }        
     }
+
     fn write_single_coil ( &mut self,code:Code, address:Address, value:Quantity) ->ModbusResponsePDU {
         self.coils[address as usize] = match value {
             0xff00 => modbus::Coil::On,
@@ -399,18 +390,19 @@ impl  BlankRegisters {
             code: code , address:address, value: value
         }
     }
+    
     fn write_single_register ( &mut self,code:Code, address:Address, value:Quantity) ->ModbusResponsePDU {
         self.holding_registers[address as usize] = value;
         ModbusResponsePDU::WriteSingleCoilResponse {
             code: code , address:address, value: value
         }
     }
+    
     fn read_discrete_inputs (&self,code:Code, address:Address, quantity:Quantity) ->ModbusResponsePDU {
         let values :Vec<u8> = binary::pack_bits(
             &self.discrete_registers[address as usize .. (address +quantity) as usize]);
         ModbusResponsePDU::ReadDiscreteInputsResponse{
             code:code,byte_count: values.len() as u8,input_status:values}
-        
     }
     
     fn read_holding_registers (&self,code:Code, address:Address, quantity:Quantity) ->ModbusResponsePDU {
@@ -418,16 +410,15 @@ impl  BlankRegisters {
         println!("quantity {}",quantity);
         values.copy_from_slice(&self.holding_registers[address as usize..(address + quantity) as usize]);
         ModbusResponsePDU::ReadHoldingRegistersResponse{
-            code:code,byte_count: quantity as u8,values:values}
-        
+            code:code,byte_count: quantity as u8,values:values}        
     }
+    
     fn read_input_registers (&self,code:Code, address:Address, quantity:Quantity) ->ModbusResponsePDU {
         let mut values :Vec<u16> = vec![0;quantity as usize];
 
         values.copy_from_slice(&self.input_registers[address as usize..(address + quantity) as usize]);
         ModbusResponsePDU::ReadInputRegistersResponse{
-            code:code,byte_count: quantity as u8,values:values}
-        
+            code:code,byte_count: quantity as u8,values:values}        
     }
     
     fn read_coils (&self,code:Code, address:Address, quantity:Quantity) ->ModbusResponsePDU {
@@ -437,6 +428,7 @@ impl  BlankRegisters {
             code:code,byte_count: values.len() as u8,coil_status:values}
         
     }
+    
     fn call(& mut self, req: ModbusRequestPDU) -> ModbusResponsePDU {
         println!("BR call");
         let resp = match FunctionCode::from_u8(req.code).unwrap(){
@@ -518,16 +510,11 @@ impl ModbusService {
 impl Service for ModbusService {
     
     type Request = ModbusRequest;
-    type Response = ModbusResponse;
-    
+    type Response = ModbusResponse;    
     type Error = io::Error;
-    //    type Future = Future<Item=Self::Response, Error=Self::Error>;
-    //type Future = Box<Future<Item = Self::Response, 
     type Future = future::FutureResult<Self::Response, Self::Error>;
 
-    //type Future = Result< Self::Response >;
     fn call(&self, req: Self::Request) -> Self::Future {
-        println!("MS call");
         let mut a = self.block.lock().unwrap();
         future::finished(ModbusResponse {
             header:req.header,
@@ -536,7 +523,7 @@ impl Service for ModbusService {
         })
     }
 }
-//block.call(req))
+
 fn main() {
     let mut block = Arc::new(Mutex::new(BlankRegisters::new()));
 
