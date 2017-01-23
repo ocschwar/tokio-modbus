@@ -15,7 +15,9 @@ extern crate docopt;
 extern crate rustc_serialize;
 #[macro_use]
 extern crate enum_primitive;
-
+//use std::rc::Arc;
+use std::sync::{Arc,Mutex};
+//use std::cell::RefCell;
 use std::str;
 use std::io::{self, ErrorKind, Write,Read};
 use enum_primitive::FromPrimitive;
@@ -267,39 +269,43 @@ impl Codec for ModbusCodec {
     // Read first 12 bytes.
     // Decide if more are needed. 
     fn decode(&mut self, buf: &mut EasyBuf) -> std::io::Result<Option<ModbusRequest>> {
-        println!("DECODE");
-        let mut rdr = Cursor::new(&buf);
-        if buf.len()>= 12 {
-            rdr.set_position(7);
-            let code = rdr.read_u8()?;
-            println!("got code {}",code as u8);
-            rdr.set_position(11);
-            println!("got buffers");
-            match FunctionCode::from_u8(code).unwrap() {
-                FunctionCode::WriteMultipleCoils |
-                FunctionCode::WriteMultipleRegisters => {
-                    let byte_count = rdr.read_u8()? as usize;
-                    if buf.len() >= byte_count + 13 {
-                        Ok(Some(parse_modbus_request(buf.as_slice()
-                                                     ).unwrap()))
-                    } else {
-                        Ok(None)
-                    }
-                },
-                _ => {
-                    println!("got default");
-                    Ok(Some(parse_modbus_request(buf.as_slice()).unwrap()))
+        if buf.len() < 12 {
+            Ok(None)
+        } else {
+            let mut length:usize = 0;
+            let mut code:u8=0;
+            let mut byte_count:usize = 0 ;
+            {
+                let z = buf.as_slice();
+                code = z[7] as u8;
+                length = match FunctionCode::from_u8(code).unwrap() {
+                    FunctionCode::WriteMultipleCoils |
+                    FunctionCode::WriteMultipleRegisters => {
+                        if buf.len() == 12 {
+                            0;
+                        }
+                        byte_count = z[12] as usize;
+                        if buf.len() >= byte_count + 13 {
+                            byte_count+13
+                        } else {
+                            0
+                        }
+                    },
+                    _ => 12
                 }
             }
-            
-        } else {
-            Ok(None)
+            println!("got code {}",code as u8);
+            match length {
+                0 => Ok(None),
+                _ => Ok(Some(parse_modbus_request(&buf.drain_to(length).as_slice()).unwrap()))
+            }
         }
     }
 
     // Attempt to decode a message assuming that the given buffer contains
     // *all* remaining input data.
     fn decode_eof(&mut self, buf: &mut EasyBuf) -> io::Result<ModbusRequest> {
+        println!("got eof");
         Ok(parse_modbus_request(&buf.as_slice())?)
     }
 
@@ -430,6 +436,7 @@ impl  BlankRegisters {
         
     }
     fn call(& mut self, req: ModbusRequestPDU) -> ModbusResponsePDU {
+        println!("BR call");
         let resp = match FunctionCode::from_u8(req.code).unwrap(){
             FunctionCode::WriteMultipleCoils  => {
                 self.write_multiple_coils(
@@ -494,20 +501,15 @@ impl  BlankRegisters {
 }
 
 pub struct ModbusService {
-    in_: futures::sync::mpsc::Sender<(
-        ModbusRequestPDU,
-        std::sync::mpsc::Sender<ModbusResponsePDU>)>,
+    block:Arc<Mutex<BlankRegisters>>
 }
 
 impl ModbusService {
     fn new (
-        in_ :futures::sync::mpsc::Sender<(
-            ModbusRequestPDU,
-            std::sync::mpsc::Sender<ModbusResponsePDU>)>,
-            ) -> ModbusService {
-        ModbusService{ in_:in_}
+        block:Arc<Mutex<BlankRegisters>>)->ModbusService {
+        ModbusService{ block:block}
     }
-
+    
 }
 
 impl Service for ModbusService {
@@ -516,37 +518,30 @@ impl Service for ModbusService {
     type Response = ModbusResponse;
     
     type Error = io::Error;
-    type Future = BoxFuture<Self::Response, Self::Error>;
+    //    type Future = Future<Item=Self::Response, Error=Self::Error>;
+    //type Future = Box<Future<Item = Self::Response, 
+    type Future = future::FutureResult<Self::Response, Self::Error>;
+
+    //type Future = Result< Self::Response >;
     fn call(&self, req: Self::Request) -> Self::Future {
-        let (resp_in,out)=std::sync::mpsc::channel::<ModbusResponsePDU>();
-        self.in_.send((req.pdu.clone(), resp_in.clone()));
-        let pdu = out.recv().unwrap();
-        println!("pdu {:?}",pdu);
-        future::ok( ModbusResponse{
+        println!("MS call");
+        let mut a = self.block.lock().unwrap();
+        future::finished(ModbusResponse {
             header:req.header,
-            pdu:pdu
-        }).boxed()
+            pdu:
+            a.call(req.pdu)
+        })
     }
 }
-
+//block.call(req))
 fn main() {
+    let mut block = Arc::new(Mutex::new(BlankRegisters::new()));
 
     let args: Args = Docopt::new(USAGE)
         .and_then(|d| d.decode())
         .unwrap_or_else(|e| {println!("DAMN {:?}",e); e.exit()});
     println!("{:?}", args);
-    let (in_,req_out)=futures::sync::mpsc::channel::<(ModbusRequestPDU,std::sync::mpsc::Sender<ModbusResponsePDU>)>(0);
-    thread::spawn(move ||{
-        
-        let mut block = BlankRegisters::new();
-        let mut core = Core::new().unwrap();
-        core.run(req_out.map(
-            |(req, tx)|{
-                tx.send(block.call(req))
-            }).for_each(|e| Ok(()))).unwrap();
-    });
     
     TcpServer::new(ModbusProto, args.flag_addr.parse().unwrap())
-        .serve(move || Ok(ModbusService::new(
-            in_.clone())));
+        .serve(move || Ok(ModbusService::new(block.clone())));
 }
