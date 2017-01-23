@@ -238,7 +238,7 @@ fn parse_modbus_request(from: &[u8]) -> std::io::Result<ModbusRequest> {
                 byte_count:byte_count,
                 data: buffer
             });
-          
+            println!("addl {:?}",addl);
         },
         _ =>  {
 
@@ -294,7 +294,7 @@ impl Codec for ModbusCodec {
                     _ => 12
                 }
             }
-            println!("got code {}",code as u8);
+            println!("got code {} {}",code as u8,length);
             match length {
                 0 => Ok(None),
                 _ => Ok(Some(parse_modbus_request(&buf.drain_to(length).as_slice()).unwrap()))
@@ -380,6 +380,8 @@ impl  BlankRegisters {
 
     {
         for i in 0..quantity {
+            println!("WMR {} {} {} {} {}",i,quantity, address, address+i, values.len());
+            
             self.holding_registers[ (address+i) as usize ] = values[i as usize] ;
         }
         ModbusResponsePDU::WriteMultipleRegistersResponse {
@@ -444,17 +446,18 @@ impl  BlankRegisters {
                     req.address,
                     req.q_or_v,
                     binary::unpack_bits(
-                        &(req.addl.unwrap().data)[...req.q_or_v as usize],
+                        &(req.addl.unwrap().data)[0..req.q_or_v as usize],
                         req.q_or_v)
                 )
             },
             FunctionCode::WriteMultipleRegisters  => {
+                println!("WMR {:?}",req);
                 self.write_multiple_registers(
                     req.code,
                     req.address,
                     req.q_or_v,
                     binary::pack_bytes(
-                        &(req.addl.unwrap().data)[...req.q_or_v as usize])
+                        &(req.addl.unwrap().data))
                         .unwrap()
                 )
             },
