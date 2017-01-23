@@ -359,7 +359,7 @@ impl  BlankRegisters {
         quantity:Quantity, values:Vec<modbus::Coil>) -> ModbusResponsePDU
     {
         // TODO: this one call is suspect. 
-        for i in 0..values.len() {
+        for i in 0..(quantity as usize) {
             self.coils[ address as usize + i] = values[i] ;
         }
         ModbusResponsePDU::WriteMultipleCoilsResponse {
@@ -438,7 +438,7 @@ impl  BlankRegisters {
                     req.address,
                     req.q_or_v,
                     binary::unpack_bits(
-                        &(req.addl.unwrap().data)[0..req.q_or_v as usize],
+                        &(req.addl.unwrap().data),
                         req.q_or_v)
                 )
             },
