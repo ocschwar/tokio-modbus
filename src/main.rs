@@ -358,12 +358,23 @@ impl  BlankRegisters {
         code:Code, address:Address,
         quantity:Quantity, values:Vec<modbus::Coil>) -> ModbusResponsePDU
     {
-        // TODO: this one call is suspect. 
-        for i in 0..(quantity as usize) {
-            self.coils[ address as usize + i] = values[i] ;
-        }
-        ModbusResponsePDU::WriteMultipleCoilsResponse {
-            code: code , address:address, quantity:quantity
+        if quantity > 0x07B0 {
+            ModbusResponsePDU::ModbusErrorResponse{
+                code:0x8F,
+                exception_code:modbus::ExceptionCode::IllegalDataValue as u8
+            }
+        } else if address as usize + quantity as usize > self.coils.len() {
+            ModbusResponsePDU::ModbusErrorResponse{
+                code:0x8F,
+                exception_code:modbus::ExceptionCode::IllegalDataAddress as u8
+            }            
+        } else {
+            for i in 0..(quantity as usize) {
+                self.coils[ address as usize + i] = values[i] ;
+            }
+            ModbusResponsePDU::WriteMultipleCoilsResponse {
+                code: code , address:address, quantity:quantity
+            }
         }
     }
 
@@ -372,22 +383,45 @@ impl  BlankRegisters {
         code:Code, address:Address,
         quantity:Quantity, values:Vec<u16>) -> ModbusResponsePDU
     {
-        for i in 0..quantity {
-            self.holding_registers[ (address+i) as usize ] = values[i as usize] ;
+        if quantity > 0x007B {
+            ModbusResponsePDU::ModbusErrorResponse{
+                code:0x90,
+                exception_code:modbus::ExceptionCode::IllegalDataValue as u8
+            }
+        } else if address as usize + quantity as usize > self.holding_registers.len() {
+            ModbusResponsePDU::ModbusErrorResponse{
+                code:0x90,
+                exception_code:modbus::ExceptionCode::IllegalDataAddress as u8
+            }            
+        } else {
+            for i in 0..quantity {
+                self.holding_registers[ (address+i) as usize ] = values[i as usize] ;
+            }
+            ModbusResponsePDU::WriteMultipleRegistersResponse {
+                code: code , address:address, quantity:quantity
+            }        
         }
-        ModbusResponsePDU::WriteMultipleRegistersResponse {
-            code: code , address:address, quantity:quantity
-        }        
     }
-
+    
     fn write_single_coil ( &mut self,code:Code, address:Address, value:Quantity) ->ModbusResponsePDU {
-        self.coils[address as usize] = match value {
-            0xff00 => modbus::Coil::On,
-            0x0000 => modbus::Coil::Off,
-            _ => panic!("Damn")
-        };
-        ModbusResponsePDU::WriteSingleCoilResponse {
-            code: code , address:address, value: value
+        
+        match value {
+            0xff00 => {
+                self.coils[address as usize] = modbus::Coil::On;
+                ModbusResponsePDU::WriteSingleCoilResponse {
+                    code: code , address:address, value: value
+                }
+            },
+            0x0000 => {
+                self.coils[address as usize] = modbus::Coil::Off;
+                ModbusResponsePDU::WriteSingleCoilResponse {
+                    code: code , address:address, value: value
+                }
+            },                    
+            _ => ModbusResponsePDU::ModbusErrorResponse{
+                code:0x85,
+                exception_code:modbus::ExceptionCode::IllegalDataValue as u8
+            }
         }
     }
     
@@ -399,34 +433,82 @@ impl  BlankRegisters {
     }
     
     fn read_discrete_inputs (&self,code:Code, address:Address, quantity:Quantity) ->ModbusResponsePDU {
-        let values :Vec<u8> = binary::pack_bits(
-            &self.discrete_registers[address as usize .. (address +quantity) as usize]);
-        ModbusResponsePDU::ReadDiscreteInputsResponse{
-            code:code,byte_count: values.len() as u8,input_status:values}
+        if quantity > 2000 {
+            ModbusResponsePDU::ModbusErrorResponse{
+                code:0x82,
+                exception_code:modbus::ExceptionCode::IllegalDataValue as u8
+            }
+        } else if address as usize + quantity as usize > self.discrete_registers.len() {
+            ModbusResponsePDU::ModbusErrorResponse{
+                code:0x82,
+                exception_code:modbus::ExceptionCode::IllegalDataAddress as u8
+            }
+            
+        } else {
+            let values :Vec<u8> = binary::pack_bits(
+                &self.discrete_registers[address as usize .. (address +quantity) as usize]);
+            ModbusResponsePDU::ReadDiscreteInputsResponse{
+                code:code,byte_count: values.len() as u8,input_status:values}
+        }
     }
     
     fn read_holding_registers (&self,code:Code, address:Address, quantity:Quantity) ->ModbusResponsePDU {
-        let mut values :Vec<u16> = vec![0;quantity as usize];
-        println!("quantity {}",quantity);
-        values.copy_from_slice(&self.holding_registers[address as usize..(address + quantity) as usize]);
-        ModbusResponsePDU::ReadHoldingRegistersResponse{
-            code:code,byte_count: quantity as u8,values:values}        
+        if quantity > 125 {
+            ModbusResponsePDU::ModbusErrorResponse{
+                code:0x83,
+                exception_code:modbus::ExceptionCode::IllegalDataValue as u8
+            }
+        } else if address as usize + quantity as usize > self.holding_registers.len() {
+            ModbusResponsePDU::ModbusErrorResponse{
+                code:0x83,
+                exception_code:modbus::ExceptionCode::IllegalDataAddress as u8
+            }            
+        } else {
+            let mut values :Vec<u16> = vec![0;quantity as usize];
+            println!("quantity {}",quantity);
+            values.copy_from_slice(&self.holding_registers[address as usize..address as usize + quantity as usize]);
+            ModbusResponsePDU::ReadHoldingRegistersResponse{
+                code:code,byte_count: quantity as u8,values:values}        
+        }
     }
     
     fn read_input_registers (&self,code:Code, address:Address, quantity:Quantity) ->ModbusResponsePDU {
-        let mut values :Vec<u16> = vec![0;quantity as usize];
-
-        values.copy_from_slice(&self.input_registers[address as usize..(address + quantity) as usize]);
-        ModbusResponsePDU::ReadInputRegistersResponse{
-            code:code,byte_count: quantity as u8,values:values}        
+        if quantity > 125 {
+            ModbusResponsePDU::ModbusErrorResponse{
+                code:0x84,
+                exception_code:modbus::ExceptionCode::IllegalDataValue as u8
+            }
+        } else if address as usize + quantity as usize > self.input_registers.len() {
+            ModbusResponsePDU::ModbusErrorResponse{
+                code:0x84,
+                exception_code:modbus::ExceptionCode::IllegalDataAddress as u8
+            }            
+        } else {
+            let mut values :Vec<u16> = vec![0;quantity as usize];
+            
+            values.copy_from_slice(&self.input_registers[address as usize..address as usize + quantity as usize]);
+            ModbusResponsePDU::ReadInputRegistersResponse{
+                code:code,byte_count: quantity as u8,values:values}        
+        }
     }
     
     fn read_coils (&self,code:Code, address:Address, quantity:Quantity) ->ModbusResponsePDU {
-        let values :Vec<u8> = binary::pack_bits(
-            &self.coils[address as usize ... (address + quantity) as usize]);
-        ModbusResponsePDU::ReadCoilsResponse{
-            code:code,byte_count: values.len() as u8,coil_status:values}
-        
+        if quantity > 2000 {
+            ModbusResponsePDU::ModbusErrorResponse{
+                code:code +0x80,
+                exception_code:modbus::ExceptionCode::IllegalDataValue as u8
+            }
+        } else if address as usize + quantity as usize > self.coils.len() {
+            ModbusResponsePDU::ModbusErrorResponse{
+                code:code +0x80,
+                exception_code:modbus::ExceptionCode::IllegalDataAddress as u8
+            }            
+        } else {
+            let values :Vec<u8> = binary::pack_bits(
+                &self.coils[address as usize .. address as usize + quantity as usize]);
+            ModbusResponsePDU::ReadCoilsResponse{
+                code:code,byte_count: values.len() as u8,coil_status:values}
+        }        
     }
     
     fn call(& mut self, req: ModbusRequestPDU) -> ModbusResponsePDU {
