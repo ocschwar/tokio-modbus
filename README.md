@@ -8,6 +8,7 @@ To run:
 ./target/debug/modbus-server slave --addr 127.0.0.1:5020
 
 TODO:
+
     1. Add error handling. [DONE]
     
        The Modbus standard imposes limits on reads and writes
@@ -27,3 +28,9 @@ TODO:
        channels makes this a better proof of concept, and allows more
        flexibility in modifying the Registers on the back end for
        simulations. 
+
+    4. Define a structure and a trait for the Modbus block, with blankRegisters as one implementation.,
+    
+       The structure should have the 4 register blocks, with size optional, and the trait should require the 
+       call() method, with a request and response PDU. That allows the same thing to be implemented for RS-485,
+       with the only change required applying to the parse() function. It needs to split the MBAP parse off. 
