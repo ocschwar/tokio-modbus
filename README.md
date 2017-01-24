@@ -32,5 +32,5 @@ TODO:
     4. Define a structure and a trait for the Modbus block, with blankRegisters as one implementation.
     
        The structure should have the 4 register blocks, with size optional, and the trait should require the 
-       call() method, with a request and response PDU. That allows the same thing to be implemented for RS-485,
-       with the only change required applying to the parse() function. It needs to split the MBAP parse off. 
+       call() method, with a request and response PDU.
+       
