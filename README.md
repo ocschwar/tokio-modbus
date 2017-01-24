@@ -15,7 +15,7 @@ TODO:
        to keep PDUs within the 255 byte limit. Server side enforcement
        needs to happen,
        
-    2. Modularize the parsing to make this work for RS-485
+    2. Modularize the parsing to make this work for RS-485 [DONE]
     
        Change the parse function so that it can forego interpreting
        the MBAP. And add code to intepret and calculate the checksum.
@@ -29,7 +29,7 @@ TODO:
        flexibility in modifying the Registers on the back end for
        simulations. 
 
-    4. Define a structure and a trait for the Modbus block, with blankRegisters as one implementation.,
+    4. Define a structure and a trait for the Modbus block, with blankRegisters as one implementation.
     
        The structure should have the 4 register blocks, with size optional, and the trait should require the 
        call() method, with a request and response PDU. That allows the same thing to be implemented for RS-485,
