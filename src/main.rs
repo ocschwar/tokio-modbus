@@ -4,6 +4,7 @@
 */ 
 #![feature(inclusive_range_syntax)] 
 #![feature(type_ascription)]
+#![feature(more_struct_aliases)]
 extern crate futures;
 
 extern crate tokio_core;
@@ -60,9 +61,10 @@ struct Args {
     flag_addr: String
 }
 
+// TODO: add ModbusRTUCodec
 
 #[derive(Default)]
-pub struct ModbusCodec;
+pub struct ModbusTCPCodec;
 
 type Code = u8;
 type Count = u8;
@@ -200,35 +202,39 @@ pub struct ModbusRequestPDU {
 }
 
 #[derive(Debug)]
-pub struct ModbusRequest {
+pub struct ModbusTCPRequest {
     header: Header,
     pdu: ModbusRequestPDU
 }
 #[derive(Debug)]
-pub struct ModbusResponse {
+pub struct ModbusTCPResponse {
     header: Header,
     pdu: ModbusResponsePDU
 }
 
-fn parse_modbus_request(from: &[u8]) -> std::io::Result<ModbusRequest> {
+fn parse_mbap (from: &[u8]) -> Header {
     let mut rdr = Cursor::new(from);
-    let header = Header{
+    Header{
         tid: rdr.read_u16::<BigEndian>().unwrap(),
         pid: rdr.read_u16::<BigEndian>().unwrap(),
         len: rdr.read_u16::<BigEndian>().unwrap(),
         uid: rdr.read_u8().unwrap(),
-    };
+    }
+}
+
+fn parse_modbus_request_pdu(from: &[u8]) -> ModbusRequestPDU {
+    let mut rdr = Cursor::new(from);
 
     let code = rdr.read_u8().unwrap();
-    let address = rdr.read_u16::<BigEndian>()?;
-    let count =  rdr.read_u16::<BigEndian>()?;
+    let address = rdr.read_u16::<BigEndian>().unwrap();
+    let count =  rdr.read_u16::<BigEndian>().unwrap();
     let mut addl = None;
 
     match FunctionCode::from_u8(code).unwrap()  {
         FunctionCode::WriteMultipleCoils  |
         FunctionCode::WriteMultipleRegisters  => {
             let mut buffer = Vec::new();
-            let byte_count = rdr.read_u8()?;
+            let byte_count = rdr.read_u8().unwrap();
             rdr.read_to_end(&mut buffer);
             addl = Some(ModbusFooter{
                 byte_count:byte_count,
@@ -241,22 +247,20 @@ fn parse_modbus_request(from: &[u8]) -> std::io::Result<ModbusRequest> {
         }
         
     };
-    Ok(ModbusRequest{
-        header:header,
-        pdu:ModbusRequestPDU{
-            code:code as u8,
-            address:address,
-            q_or_v: count,
-            addl:addl
-        }
-            
-    })
+    ModbusRequestPDU{
+        code:code as u8,
+        address:address,
+        q_or_v: count,
+        addl:addl
+    }
 }
 
 
-impl Codec for ModbusCodec {
-    type In = ModbusRequest;
-    type Out = ModbusResponse;
+
+impl Codec for ModbusTCPCodec {
+    // 
+    type In = ModbusTCPRequest;
+    type Out = ModbusTCPResponse;
 
     // Attempt to decode a message from the given buffer if a complete
     // message is available; returns `Ok(None)` if the buffer does not yet
@@ -264,7 +268,7 @@ impl Codec for ModbusCodec {
 
     // Read first 12 bytes.
     // Decide if more are needed. 
-    fn decode(&mut self, buf: &mut EasyBuf) -> std::io::Result<Option<ModbusRequest>> {
+    fn decode(&mut self, buf: &mut EasyBuf) -> std::io::Result<Option<Self::In>> {
         if buf.len() < 12 {
             Ok(None)
         } else {
@@ -291,21 +295,33 @@ impl Codec for ModbusCodec {
                     _ => 12
                 }
             }
+            let S = &buf.drain_to(length);
+            let s = S.as_slice();
 
             match length {
                 0 => Ok(None),
-                _ => Ok(Some(parse_modbus_request(&buf.drain_to(length).as_slice()).unwrap()))
+
+                _ => {
+                    Ok(Some(ModbusTCPRequest {
+                        header:parse_mbap(&s[0..7]),
+                        pdu:parse_modbus_request_pdu(&s[7..length])
+                    }))
+                }
             }
         }
     }
 
     // Attempt to decode a message assuming that the given buffer contains
     // *all* remaining input data.
-    fn decode_eof(&mut self, buf: &mut EasyBuf) -> io::Result<ModbusRequest> {
-        Ok(parse_modbus_request(&buf.as_slice())?)
+    fn decode_eof(&mut self, buf: &mut EasyBuf) -> io::Result<ModbusTCPRequest> {
+        let s = buf.as_slice();
+        Ok(ModbusTCPRequest {
+            header:parse_mbap(&s[0..7]),
+            pdu:parse_modbus_request_pdu(&s[7..buf.len()])
+        })
     }
 
-    fn encode(&mut self, item: ModbusResponse, into: &mut Vec<u8>) -> io::Result<()> {
+    fn encode(&mut self, item: ModbusTCPResponse, into: &mut Vec<u8>) -> io::Result<()> {
         into.write(item.header.encode().as_slice());
         into.write(item.pdu.encode().as_slice());
         Ok(())
@@ -314,16 +330,16 @@ impl Codec for ModbusCodec {
 
 
 
-pub struct ModbusProto;
+pub struct ModbusTCPProto;
 
-impl<T: Io + 'static> ServerProto<T> for ModbusProto {
-    type Request = ModbusRequest;
-    type Response = ModbusResponse;
-    type Transport = Framed<T, ModbusCodec>;
+impl<T: Io + 'static> ServerProto<T> for ModbusTCPProto {
+    type Request = ModbusTCPRequest;
+    type Response = ModbusTCPResponse;
+    type Transport = Framed<T, ModbusTCPCodec>;
     type BindTransport = ::std::result::Result<Self::Transport,io::Error>;
 
     fn bind_transport(&self, io: T) -> Self::BindTransport {
-        Ok(io.framed(ModbusCodec))
+        Ok(io.framed(ModbusTCPCodec))
     }
 }
 
@@ -591,14 +607,14 @@ impl ModbusService {
 
 impl Service for ModbusService {
     
-    type Request = ModbusRequest;
-    type Response = ModbusResponse;    
+    type Request = ModbusTCPRequest;
+    type Response = ModbusTCPResponse;    
     type Error = io::Error;
     type Future = future::FutureResult<Self::Response, Self::Error>;
 
     fn call(&self, req: Self::Request) -> Self::Future {
         let mut a = self.block.lock().unwrap();
-        future::finished(ModbusResponse {
+        future::finished(Self::Response {
             header:req.header,
             pdu:
             a.call(req.pdu)
@@ -614,6 +630,6 @@ fn main() {
         .unwrap_or_else(|e| {println!("DAMN {:?}",e); e.exit()});
     println!("{:?}", args);
     
-    TcpServer::new(ModbusProto, args.flag_addr.parse().unwrap())
+    TcpServer::new(ModbusTCPProto, args.flag_addr.parse().unwrap())
         .serve(move || Ok(ModbusService::new(block.clone())));
 }
