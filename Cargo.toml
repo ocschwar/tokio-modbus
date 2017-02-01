@@ -1,5 +1,5 @@
 [package]
-name = "modbus-server"
+name = "modbus_server"
 version = "0.1.0"
 authors = ["Omri Schwarz <oschwarz@cse.fraunhofer.org>"]
 
