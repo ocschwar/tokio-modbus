@@ -36,7 +36,3 @@ TODO:
        with the only change required applying to the parse() function. It needs to split the MBAP parse off. 
        
     5. Enable multiple slaves on one por. (I.e. array indexed by MBAP)
-<<<<<<< HEAD
-
-=======
->>>>>>> 481c49aefde4a45b463757d8c9ce8d62f7bb045f
