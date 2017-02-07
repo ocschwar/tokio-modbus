@@ -143,7 +143,7 @@ pub struct Header {
     tid: u16,
     pid: u16,
     len: u16,
-    uid: u8,
+    pub uid: u8,
 }
 
 impl Header {
