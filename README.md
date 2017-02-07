@@ -35,4 +35,4 @@ TODO:
        call() method, with a request and response PDU. That allows the same thing to be implemented for RS-485,
        with the only change required applying to the parse() function. It needs to split the MBAP parse off. 
        
-    5. Enable multiple slaves on one por. (I.e. array indexed by MBAP)
+    5. Enable multiple slaves on one por. (I.e. array indexed by MBAP) [DONE]
