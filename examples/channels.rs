@@ -14,13 +14,13 @@ extern crate tokio_core;
 
 extern crate docopt;
 extern crate rustc_serialize;
-
+use futures::Future;
 use std::str;
 use futures::{future, Stream,Sink};
 use std::thread;
-use futures::sync::mpsc::unbounded;
-use futures::sync::mpsc::{UnboundedSender};
-use std::sync::mpsc::channel;
+use futures::sync::mpsc;
+use futures::sync::oneshot;
+
 use docopt::Docopt;
 use std::io::{self};
 use tokio_proto::TcpServer;
@@ -48,14 +48,14 @@ struct Args {
 use modbus_server::BlankRegisters;
 
 pub struct ModbusService {
-    in_: UnboundedSender<(ModbusRequestPDU,
-                          std::sync::mpsc::Sender<ModbusResponsePDU>)>
+    in_: mpsc::Sender<(ModbusRequestPDU,
+                       oneshot::Sender<ModbusResponsePDU>)>
 }
 
 impl ModbusService {
     fn new (
-        in_:UnboundedSender<(ModbusRequestPDU,
-                             std::sync::mpsc::Sender<ModbusResponsePDU>)>
+        in_:mpsc::Sender<(ModbusRequestPDU,
+                          oneshot::Sender<ModbusResponsePDU>)>
         )->ModbusService {
         ModbusService{ in_:in_}
     }
@@ -70,14 +70,21 @@ impl Service for ModbusService {
     type Future = future::FutureResult<Self::Response, Self::Error>;
 
     fn call(&self, req: Self::Request) -> Self::Future {
-        let (resp_in,out)=channel ::<ModbusResponsePDU>();
+
+        let (resp_in,out)=oneshot ::channel::<ModbusResponsePDU>();
         let tmp = self.in_.clone();
-        tmp.send((req.pdu.clone(), resp_in));
-        let pdu = out.recv().unwrap();
-        future::finished(ModbusTCPResponse {
-            header:req.header,
-            pdu:pdu
-        })
+        tmp.send((req.pdu.clone(), resp_in)).poll();
+
+        let rx = out.map(|pdu|{
+
+            ModbusTCPResponse {
+                header:req.header.clone(),
+                pdu:pdu
+            }
+        });
+        
+        let w = rx.wait().unwrap();
+        future::finished(w)
     }
 }
 
@@ -87,14 +94,15 @@ fn main() {
         .and_then(|d| d.decode())
         .unwrap_or_else(|e| {println!("DAMN {:?}",e); e.exit()});
     println!("{:?}", args);
-    let (in_,req_out)= unbounded::<(ModbusRequestPDU,std::sync::mpsc::Sender<ModbusResponsePDU>)>();
+    let (in_,req_out)= mpsc::channel::<(ModbusRequestPDU,oneshot::Sender<ModbusResponsePDU>)>(1);
     thread::spawn(move ||{
         
         let mut block = BlankRegisters::new();
         let mut core = Core::new().unwrap();
         core.run(req_out.map(
             |(req, tx)|{
-                tx.send(block.call(req))
+                println!("Sending {:?}",req);
+                tx.complete(block.call(req))
             }).for_each(|e| Ok(()))).unwrap();
     });
     
