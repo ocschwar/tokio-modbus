@@ -137,7 +137,7 @@ impl ModbusResponsePDU {
 
 }
 // This could be imported from modbus::tcp. 
-#[derive(RustcEncodable, RustcDecodable,Debug)]
+#[derive(RustcEncodable, RustcDecodable,Debug,Clone)]
 #[repr(packed)]
 pub struct Header {
     tid: u16,
