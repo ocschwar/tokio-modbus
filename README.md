@@ -20,7 +20,7 @@ TODO:
        Change the parse function so that it can forego interpreting
        the MBAP. And add code to intepret and calculate the checksum.
        
-    3. Come back to using channels ?
+    3. Come back to using channels ? [DONE]
 
        Channels are the way to use the Actor Model in Rust,
        and the Actor Model is how stuff gets develoiped in this sector.
