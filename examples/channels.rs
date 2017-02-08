@@ -1,0 +1,105 @@
+//
+/*
+
+*/ 
+#![feature(inclusive_range_syntax)] 
+#![feature(type_ascription)]
+#![feature(more_struct_aliases)]
+
+extern crate modbus_server;
+extern crate futures;
+extern crate tokio_proto;
+extern crate tokio_service;
+extern crate tokio_core;
+
+extern crate docopt;
+extern crate rustc_serialize;
+
+use std::str;
+use futures::{future, Stream,Sink};
+use std::thread;
+use futures::sync::mpsc::unbounded;
+use futures::sync::mpsc::{UnboundedSender};
+use std::sync::mpsc::channel;
+use docopt::Docopt;
+use std::io::{self};
+use tokio_proto::TcpServer;
+use tokio_service::Service;
+use tokio_core::reactor::Core;
+    
+use modbus_server::{ModbusTCPProto,ModbusTCPResponse,ModbusTCPRequest};
+use modbus_server::{ModbusRequestPDU,ModbusResponsePDU};
+
+const USAGE: &'static str = "
+Usage: slave [options] <resources> ...
+
+Options:
+    --addr=<addr>  # Base URL  [default: 127.0.0.1:502].
+";
+
+#[derive(Debug, RustcDecodable)]
+struct Args {
+    arg_resource: Vec<String>,
+    flag_addr: String
+}
+
+// TODO: add ModbusRTUCodec
+
+use modbus_server::BlankRegisters;
+
+pub struct ModbusService {
+    in_: UnboundedSender<(ModbusRequestPDU,
+                          std::sync::mpsc::Sender<ModbusResponsePDU>)>
+}
+
+impl ModbusService {
+    fn new (
+        in_:UnboundedSender<(ModbusRequestPDU,
+                             std::sync::mpsc::Sender<ModbusResponsePDU>)>
+        )->ModbusService {
+        ModbusService{ in_:in_}
+    }
+    
+}
+
+impl Service for ModbusService {
+    
+    type Request = ModbusTCPRequest;
+    type Response = ModbusTCPResponse;    
+    type Error = io::Error;
+    type Future = future::FutureResult<Self::Response, Self::Error>;
+
+    fn call(&self, req: Self::Request) -> Self::Future {
+        let (resp_in,out)=channel ::<ModbusResponsePDU>();
+        let tmp = self.in_.clone();
+        tmp.send((req.pdu.clone(), resp_in));
+        let pdu = out.recv().unwrap();
+        future::finished(ModbusTCPResponse {
+            header:req.header,
+            pdu:pdu
+        })
+    }
+}
+
+fn main() {
+
+    let args: Args = Docopt::new(USAGE)
+        .and_then(|d| d.decode())
+        .unwrap_or_else(|e| {println!("DAMN {:?}",e); e.exit()});
+    println!("{:?}", args);
+    let (in_,req_out)= unbounded::<(ModbusRequestPDU,std::sync::mpsc::Sender<ModbusResponsePDU>)>();
+    thread::spawn(move ||{
+        
+        let mut block = BlankRegisters::new();
+        let mut core = Core::new().unwrap();
+        core.run(req_out.map(
+            |(req, tx)|{
+                tx.send(block.call(req))
+            }).for_each(|e| Ok(()))).unwrap();
+    });
+    
+
+    TcpServer::new(ModbusTCPProto, args.flag_addr.parse().unwrap())
+        .serve(move || Ok(ModbusService::new(in_.clone())));
+}
+
